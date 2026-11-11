@@ -3,7 +3,7 @@
 # fix-nvidia-kali.sh — починка NVIDIA-драйвера на Kali Linux
 # Для: GeForce GTX 1660 SUPER, ядро 7.2.x, чёрный экран из-за nouveau.
 #
-# VER: 2
+# VER: 3
 #
 # Возможности:
 #   - САМООБНОВЛЕНИЕ: при запуске сверяет себя с GitHub и, если я (автор)
@@ -16,6 +16,9 @@
 #   - Проверяет Secure Boot, блокирует nouveau, убирает лишние ядра
 #   - При любой ошибке печатает компактную ДИАГНОСТИКУ (одно фото = всё)
 #   - После успеха САМОУДАЛЯЕТСЯ и предлагает перезагрузку
+#
+# v3: FIX — apt по-русски пишет «Kandidat», а не «Candidate» → весь вывод
+#     apt-cache/apt-get теперь под LC_ALL=C (англ.), парсинг работает везде.
 # =============================================================================
 
 G=$'\033[32m'; R=$'\033[31m'; Y=$'\033[33m'; N=$'\033[0m'
@@ -25,7 +28,7 @@ bad()  { printf '%s[!!]%s %s\n' "$R" "$N" "$1"; }
 
 SELF="$(readlink -f "$0")"
 SELF_URL="https://raw.githubusercontent.com/uf0rs/kali-nvidia-fix/master/fix-nvidia-kali.sh"
-MYVER="2"
+MYVER="3"
 
 if [ "$EUID" -ne 0 ]; then
   bad "Запусти через sudo:  sudo bash $0"
@@ -54,14 +57,14 @@ dump_diag() {
   echo "Ядро: $(uname -r)"
   echo "--- /etc/apt/sources.list.d:"
   ls -l /etc/apt/sources.list.d/ 2>/dev/null
+  echo "--- файлы индексов nvidia в кэше apt:"
+  ls -la /var/lib/apt/lists/ 2>/dev/null | grep -i -E 'nvidia|download' || echo "(нет — индекс NVIDIA не лежит в кэше)"
   echo "--- apt-cache policy nvidia-driver:"
-  apt-cache policy nvidia-driver 2>/dev/null
+  LC_ALL=C apt-cache policy nvidia-driver 2>/dev/null
   echo "--- dkms status:"
   dkms status 2>/dev/null
   echo "--- ошибки последнего apt update:"
   grep -iE 'err|404|E:' /tmp/nvidia-fix-apt.log 2>/dev/null | tail -8
-  echo "--- последние ошибки dpkg:"
-  tail -n 15 /var/log/dpkg.log 2>/dev/null | grep -i error || true
   echo "---------------------------------------------------------------"
 }
 
@@ -87,9 +90,9 @@ echo 'deb [trusted=yes] https://developer.download.nvidia.com/compute/cuda/repos
 ok "Репозиторий добавлен"
 
 info "Обновление индексов (несколько минут, не прерывай)..."
-apt-get update 2>&1 | tee /tmp/nvidia-fix-apt.log >/dev/null || info "apt update выдал ошибки — пробуем план B..."
+LC_ALL=C apt-get update 2>&1 | tee /tmp/nvidia-fix-apt.log >/dev/null || info "apt update выдал ошибки — пробуем план B..."
 
-CAND=$(apt-cache policy nvidia-driver 2>/dev/null | awk '/Candidate:/{print $2}')
+CAND=$(LC_ALL=C apt-cache policy nvidia-driver 2>/dev/null | awk '/Candidate:/{print $2}')
 
 # --- План B: если CDN отдал 404 на Packages — качаем индекс вручную ---
 if [ -z "$CAND" ] || [ "${CAND%%.*}" = "550" ]; then
@@ -101,13 +104,13 @@ if [ -z "$CAND" ] || [ "${CAND%%.*}" = "550" ]; then
        /var/lib/apt/lists/developer.download.nvidia.com_compute_cuda_repos_debian13_x86_64_Packages_amd64 2>/dev/null || true
     rm -rf "$TMP"
     ok "Индекс загружен вручную"
-    apt-get update >/dev/null 2>&1 || true
+    LC_ALL=C apt-get update >/dev/null 2>&1 || true
   else
     bad "Не удалось скачать Packages.gz — проверь интернет"
     dump_diag
     exit 1
   fi
-  CAND=$(apt-cache policy nvidia-driver 2>/dev/null | awk '/Candidate:/{print $2}')
+  CAND=$(LC_ALL=C apt-cache policy nvidia-driver 2>/dev/null | awk '/Candidate:/{print $2}')
 fi
 
 if [ -z "$CAND" ] || [ "${CAND%%.*}" = "550" ]; then
@@ -121,7 +124,7 @@ echo
 echo "=== 3/7: Secure Boot ==="
 DEBIAN_FRONTEND=noninteractive apt-get install -y mokutil >/dev/null 2>&1 || true
 if command -v mokutil >/dev/null 2>&1; then
-  if mokutil --sb-state 2>/dev/null | grep -qi 'enabled'; then
+  if mokutil --sb-state 2>/dev/null | grep -qiE 'enabled|включ'; then
     bad "Secure Boot ВКЛЮЧЁН — модуль NVIDIA не загрузится."
     bad "Отключи его в BIOS (Boot -> Secure Boot -> Disabled) и запусти скрипт снова."
     exit 1
@@ -171,12 +174,12 @@ update-grub >/dev/null 2>&1 && ok "GRUB обновлён"
 echo
 echo "=== 6/7: установка драйвера NVIDIA (качает сотни МБ, не прерывай) ==="
 INSTALLED=0
-if DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-unauthenticated nvidia-driver; then
+if DEBIAN_FRONTEND=noninteractive LC_ALL=C apt-get install -y --allow-unauthenticated nvidia-driver; then
   INSTALLED=1
 else
   info "Первая попытка не удалась — чиню зависимости и пробую ещё раз..."
-  DEBIAN_FRONTEND=noninteractive apt-get --fix-broken install -y >/dev/null 2>&1 || true
-  if DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-unauthenticated nvidia-driver; then
+  DEBIAN_FRONTEND=noninteractive LC_ALL=C apt-get --fix-broken install -y >/dev/null 2>&1 || true
+  if DEBIAN_FRONTEND=noninteractive LC_ALL=C apt-get install -y --allow-unauthenticated nvidia-driver; then
     INSTALLED=1
   fi
 fi
